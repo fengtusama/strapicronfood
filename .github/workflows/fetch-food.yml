@@ -1,0 +1,85 @@
+name: Fetch Strapi Food
+
+on:
+  schedule:
+    # 每小時的第 55 分執行
+    - cron: "*/55 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-food:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "20"
+
+      - name: Install node-fetch
+        run: npm install node-fetch@3
+
+      - name: Fetch food from Strapi
+        env:
+          STRAPI_URL: ${{ secrets.STRAPI_URL }}
+          STRAPI_TOKEN: ${{ secrets.STRAPI_TOKEN }}
+        run: |
+          node --input-type=module -e '
+          import fetch from "node-fetch";
+          import fs from "fs";
+
+          const url = `${process.env.STRAPI_URL}/api/foods?populate=photo`;
+          const headers = { Authorization: `Bearer ${process.env.STRAPI_TOKEN}` };
+
+          console.log("Fetching from:", url);
+
+          try {
+            const res = await fetch(url, { headers });
+            if (!res.ok) throw new Error(`Fetch failed: ${res.status} ${res.statusText}`);
+
+            const data = await res.json();
+            
+            const foods = (data.data || []).map(item => {
+              const attrs = item.attributes || {};
+              return {
+                id: item.id,
+                name: attrs.name || "",
+                amount: attrs.amount || 0,
+                price: attrs.price || 0,
+                shop: attrs.shop || "",
+                todate: attrs.todate || "",
+                photo: Array.isArray(attrs.photo?.data) 
+                  ? attrs.photo.data.map(p => p.attributes?.url || "") 
+                  : [],
+                photoHash: attrs.photoHash || ""
+              };
+            });
+
+            fs.writeFileSync("food.json", JSON.stringify(foods, null, 2));
+            console.log("food.json generated successfully.");
+          } catch (error) {
+            console.error("Error executing script:", error);
+            process.exit(1);
+          }
+          '
+
+      - name: Commit & push food.json
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          
+          # 檢查是否有檔案變更 (使用 git status)
+          if [[ -n $(git status -s food.json) ]]; then
+            git add food.json
+            git commit -m "Update food.json [skip ci]"
+            git push
+            echo "Changes pushed to repository." 
+          else
+            echo "No changes in food.json, skipping commit."
+          fi
